@@ -269,30 +269,78 @@ project id, the task id, filename and title of the task."
 		  )
 		)
 	  )
-	(org-table-create "2x2")
-	(org-table-next-field)
-	(insert "Project")
-	(org-table-next-field)
-	(insert "Effort")
-	(setq total 0)
-	(dotimes (idx (/ (length pro-time) 2))
+	;; Build list of (project-id . hours) pairs
+	(let ((project-hours '())
+		  (daily-schedule '())  ;; Will hold list of days, each day is list of (project-id . hours)
+		  (total 0))
+	  
+	  ;; Collect all project hours
+	  (dotimes (idx (/ (length pro-time) 2))
+		(let ((pid (nth (* 2 idx) pro-time))
+			  (hours (nth (+ (* 2 idx) 1) pro-time)))
+		  (push (cons pid hours) project-hours)))
+	  
+	  ;; Sort by hours descending to fill with bigger blocks first
+	  (setq project-hours (sort project-hours (lambda (a b) (> (cdr a) (cdr b)))))
+	  
+	  ;; Initialize 5 days with empty lists
+	  (dotimes (i 5)
+		(push '() daily-schedule))
+	  (setq daily-schedule (nreverse daily-schedule))
+	  
+	  ;; Distribute hours across days, filling up to 7.8h per day
+	  (dolist (proj project-hours)
+		(let ((remaining-hours (cdr proj))
+			  (proj-id (car proj))
+			  (day-idx 0))
+		  (while (and (> remaining-hours 0) (< day-idx 5))
+			(let* ((day-total (apply '+ (mapcar 'cdr (nth day-idx daily-schedule))))
+				   (day-space (- 7.8 day-total))
+				   (to-add (min remaining-hours day-space)))
+			  (when (> to-add 0)
+				(setf (nth day-idx daily-schedule)
+					  (cons (cons proj-id to-add) (nth day-idx daily-schedule)))
+				(setq remaining-hours (- remaining-hours to-add)))
+			  (setq day-idx (1+ day-idx))))))
+	  
+	  ;; Create table with day columns
+	  (org-table-create "7x2")
 	  (org-table-next-field)
-	  (insert (nth 2 (proroam--find-project (nth (* 2 idx) pro-time))))
+	  (insert "Project")
 	  (org-table-next-field)
-	  (insert (format "%d" (ceiling (nth (+ (* 2 idx) 1) pro-time))))
-	  (setq total (+ total (ceiling (nth (+ (* 2 idx) 1) pro-time))))
-	  )
-	(org-table-next-field)
-	(insert "Total:")
-	(org-table-next-field)
-	(insert (format "%.2f" total))
-	(org-table-align)
-	(forward-line)
-	(insert "Project\\tSubmitted\\tHR001\\t")
+	  (insert "Mon")
+	  (org-table-next-field)
+	  (insert "Tue")
+	  (org-table-next-field)
+	  (insert "Wed")
+	  (org-table-next-field)
+	  (insert "Thu")
+	  (org-table-next-field)
+	  (insert "Fri")
+	  (org-table-next-field)
+	  (insert "Total")
+	  
+	  ;; Write table rows for each project
+	  (dotimes (idx (/ (length pro-time) 2))
+		(let* ((proj-id (nth (* 2 idx) pro-time))
+			   (total-hours (nth (+ (* 2 idx) 1) pro-time))
+			   (project (proroam--find-project proj-id))
+			   (habitat-id (nth 3 project))
+			   (project-name (if (string= habitat-id "no-id") (nth 2 project) habitat-id)))
+		  (org-table-next-field)
+		  (insert project-name)
+		  ;; Insert hours for each day
+		  (dotimes (day 5)
+			(org-table-next-field)
+			(let ((day-hours (cdr (assoc proj-id (nth day daily-schedule) 'string=))))
+			  (insert (if day-hours (format "%.1f" day-hours) ""))))
+		  (org-table-next-field)
+		  (insert (format "%.1f" total-hours))
+		  (setq total (+ total total-hours)))))
 	
-	pro-time
-	)
+	(org-table-align))
   )
+
 ;; Type	Status	Project No.	Project Description	Approver ID	Project Task No.	Description	1 Mon	2 Tue	3 Wed	4 Thu	5 Fri	6 Sat	7 Sun	Total
 ;; Project	Submitted	HR001	Holiday	STEFAAN.WIJNANTS	1	General					7,8			7,8
 ;; Project	Submitted	2022-0587	Feed4Flex_SBO	LAURENT.DECLERCQ	602	T3.4: Border of line layout design of workplace considering ergonomics and safety	5							5
