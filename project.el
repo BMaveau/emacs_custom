@@ -175,33 +175,35 @@ project id, the task id, filename and title of the task."
 
 (defun proroam--write-task-table ()
   "Writes in every project file the task overview table."
-  (mapc (lambda (p)
-		  (with-current-buffer (find-file-noselect (nth 1 p))
-			(goto-char (point-min))
-			(if (search-forward "* Overview Task" nil t)
-				(progn
-				  (message "%d" (point))
-				  (delete-region (point) (point-max)))
-			  (progn
-				(goto-char (point-max))
-				(insert "* Overview Task")))
-			(insert "\n\n")
-			(goto-char (point-max))
-			(org-table-create (format "%dx2" (length proroam-table-format)))
-			
-			(dolist (header (mapcar 'car proroam-table-format))
-			  (org-table-next-field)
-			  (insert header))
-			(dolist (ta (proroam--tasks))
-			  (when  (string= (nth 0 ta) (nth 0 p))
-				(dolist (field (mapcar 'cadr proroam-table-format))
-				  (org-table-next-field)
-				  (insert (funcall field ta)))
-				)
-			  )
-			(org-table-align)
-			))
-		(proroam--projects))
+  ;; Fetch tasks once instead of for every project
+  (let ((all-tasks (proroam--tasks)))
+    (mapc (lambda (p)
+            (with-current-buffer (find-file-noselect (nth 1 p))
+              (goto-char (point-min))
+              (if (search-forward "* Overview Task" nil t)
+                  (progn
+                    (message "%d" (point))
+                    (delete-region (point) (point-max)))
+                (progn
+                  (goto-char (point-max))
+                  (insert "* Overview Task")))
+              (insert "\n\n")
+              (goto-char (point-max))
+              (org-table-create (format "%dx2" (length proroam-table-format)))
+              
+              (dolist (header (mapcar 'car proroam-table-format))
+                (org-table-next-field)
+                (insert header))
+              ;; Filter tasks for this project from the cached list
+              (dolist (ta all-tasks)
+                (when (string= (nth 0 ta) (nth 0 p))
+                  (dolist (field (mapcar 'cadr proroam-table-format))
+                    (org-table-next-field)
+                    (insert (funcall field ta)))
+                  ))
+              (org-table-align)
+              ))
+          (proroam--projects)))
   )
 
 (defun proroam--meeting-time (date pro-time)
