@@ -303,22 +303,8 @@ project id, the task id, filename and title of the task."
 				(setq remaining-hours (- remaining-hours to-add)))
 			  (setq day-idx (1+ day-idx))))))
 	  
-	  ;; Create table with day columns
-	  (org-table-create "7x2")
-	  (org-table-next-field)
-	  (insert "Project")
-	  (org-table-next-field)
-	  (insert "Mon")
-	  (org-table-next-field)
-	  (insert "Tue")
-	  (org-table-next-field)
-	  (insert "Wed")
-	  (org-table-next-field)
-	  (insert "Thu")
-	  (org-table-next-field)
-	  (insert "Fri")
-	  (org-table-next-field)
-	  (insert "Total")
+	  ;; Write header line with tabs
+	  (insert "Type\tStatus\tProject No.\tProject Description\tApprover ID\tProject Task No.\tDescription\tMon\tTue\tWed\tThu\tFri\n")
 	  
 	  ;; Write table rows for each project
 	  (dotimes (idx (/ (length pro-time) 2))
@@ -326,19 +312,19 @@ project id, the task id, filename and title of the task."
 			   (total-hours (nth (+ (* 2 idx) 1) pro-time))
 			   (project (proroam--find-project proj-id))
 			   (habitat-id (nth 3 project))
-			   (project-name (if (string= habitat-id "no-id") (nth 2 project) habitat-id)))
-		  (org-table-next-field)
-		  (insert project-name)
-		  ;; Insert hours for each day
+			   (project-no (if (string= habitat-id "no-id") (nth 2 project) habitat-id))
+			   (project-desc (nth 2 project)))
+		  ;; Type, Status, Project No., Project Description
+		  (insert (format "Project\tSubmitted\t%s\t%s\t\t\t\t" project-no project-desc))
+		  ;; Hours for each day (Mon-Fri)
 		  (dotimes (day 5)
-			(org-table-next-field)
 			(let ((day-hours (cdr (assoc proj-id (nth day daily-schedule) 'string=))))
-			  (insert (if day-hours (format "%.1f" day-hours) ""))))
-		  (org-table-next-field)
-		  (insert (format "%.1f" total-hours))
-		  (setq total (+ total total-hours)))))
-	
-	(org-table-align))
+			  (insert (if day-hours (replace-regexp-in-string "\\." "," (format "%.1f" day-hours)) ""))
+			  (insert "\t")))
+		  ;; Total
+		  ;; (insert (replace-regexp-in-string "\\." "," (format "%.1f" total-hours)))
+		  (insert "\n")
+		  ))))
   )
 
 ;; Type	Status	Project No.	Project Description	Approver ID	Project Task No.	Description	1 Mon	2 Tue	3 Wed	4 Thu	5 Fri	6 Sat	7 Sun	Total
