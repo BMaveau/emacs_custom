@@ -1,4 +1,4 @@
-;;; project --- Gathering tasks in Roam files and creating overview table in their project file
+;;; project --- Gathering tasks in Roam files and creating overview table in their project file  -*- lexical-binding: t; -*-
 ;;; Commentary:
 ;;; Fetches the projects with project--projects
 
@@ -7,8 +7,15 @@
 (require 'org-roam)
 (require 'org-roam-dailies)
 
+(defvar proroam--projects-cache nil
+  "When non-nil, list returned by `proroam--projects' instead of re-reading the files.")
+
 (defun proroam--projects ()
   "Find all node ids with a Project tag."
+  (or proroam--projects-cache (proroam--load-projects)))
+
+(defun proroam--load-projects ()
+  "Find all node ids with a Project tag by querying the DB and reading the files."
   (let* ((project-ids (flatten-tree (org-roam-db-query [:select [node-id] :from tags :where (= tag "Project")] )))
 		 (projects (mapcar (lambda (n) (nth 0 (org-roam-db-query [:select [id file title] :from nodes :where (= id $s1)] n)))
 						   project-ids))
@@ -17,7 +24,9 @@
 								 (generate-new-buffer "customroam")
 							   (insert-file-contents (nth 1 p))
 							   (goto-char (point-min))
-							   (append p (list (if (search-forward-regexp "^- habitat-id: \\([0-9-]+\\)$" nil t) (match-string 1) "no-id")))))
+							   (append p (list (if (search-forward-regexp "^- habitat-id: \\([0-9-]+\\)$" nil t) (match-string 1) "no-id")
+								   (progn (goto-char (point-min))
+										  (when (search-forward-regexp "^- task-no: \\([A-Za-z0-9._-]+\\)$" nil t) (match-string 1)))))))
 						   projects)))
 	projects
 	)
@@ -42,7 +51,10 @@ title of the task."
 							(insert-file-contents (nth 1 n))
 							(goto-char (point-min))
 							(if (search-forward-regexp "^- Project: \\[\\[id:\\([^]]+\\)\\]\\[\\([^]]+\\)\\]\\]$" nil t)
-								(cons (match-string 1) n)
+								(let ((pid (match-string 1)))
+								  (goto-char (point-min))
+								  (append (list pid) n
+										  (list (when (search-forward-regexp "^- task-no: \\([A-Za-z0-9._-]+\\)$" nil t) (match-string 1)))))
 							  nil)))
 						tasks)
 		  )
@@ -77,12 +89,19 @@ project id, the task id, filename and title of the task."
 							(insert-file-contents (nth 1 n))
 							(goto-char (point-min))
 							(if (search-forward-regexp "^- Project: \\[\\[id:\\([^]]+\\)\\]\\[\\([^]]+\\)\\]\\]$" nil t)
-								(cons (match-string 1) n)
+								(let ((pid (match-string 1)))
+								  (goto-char (point-min))
+								  (append (list pid) n
+										  (list (when (search-forward-regexp "^- task-no: \\([A-Za-z0-9._-]+\\)$" nil t) (match-string 1)))))
 							  nil)))
 						tasks)
 		  )
 	)
   )
+
+(defun proroam--time-key (pid task-no)
+  "Key identifying a timesheet row for project PID and TASK-NO (may be nil)."
+  (concat pid "|" (or task-no "")))
 
 (defun proroam--find-project (pid)
   "Find the project with the corresponding PID."
@@ -104,7 +123,7 @@ project id, the task id, filename and title of the task."
 (defun proroam-get-status (task)
   "Decides if the TASK is finished or ongoing."
   (with-current-buffer (find-file-noselect (nth 2 task))
-	(let ((status ""))
+	(let ((status "") (org-element-use-cache nil))
 	  (setq status (if (seq-contains-p (org-map-entries '(or (org-entry-get nil "TODO") "DONE")) "TODO") "TODO" "DONE"))
 	  (put-text-property 0 4 'font-lock-face 'org-todo status)
 	  status
@@ -114,7 +133,7 @@ project id, the task id, filename and title of the task."
 (defun proroam-get-effort (task)
   "Sums the total estimated effort of the TASK."
   (with-current-buffer (find-file-noselect (nth 2 task))
-	(org-duration-from-minutes (-sum (org-map-entries '(org-duration-to-minutes (or (org-entry-get nil "EFFORT") "")))))
+	(org-duration-from-minutes (-sum (let ((org-element-use-cache nil)) (org-map-entries '(org-duration-to-minutes (or (org-entry-get nil "EFFORT") ""))))))
 	)
   )
 
@@ -225,7 +244,8 @@ project id, the task id, filename and title of the task."
 			(project-id (nth idx projects))
 			(prev-time 0))
 		(unless (string= project-id "None")
-		  (setq project-id (substring project-id 5 41))
+		  (setq project-id (proroam--time-key (substring project-id 5 41)
+											  (nth 4 (proroam--find-project (substring project-id 5 41)))))
 		  (setq prev-time (or (plist-get pro-time project-id 'string=) 0))
 		  (when (> task-time 0)
 			(setq pro-time (plist-put pro-time project-id (+ prev-time task-time) 'string=)))
@@ -237,7 +257,8 @@ project id, the task id, filename and title of the task."
   )
 
 (defun proroam-timesheet (week-number)
-  (let ( (pro-time '())
+  (let* ((proroam--projects-cache (proroam--load-projects))
+		 (pro-time '())
 		 (sdate '())
 		 (fdate '()))
 	(setq sdate (parse-time-string (format "2026-W%.2d" week-number)))
@@ -254,20 +275,23 @@ project id, the task id, filename and title of the task."
 	(dolist (task (proroam--tasks))
 	  (when (nth 2 task)
 		(with-current-buffer (find-file-noselect (nth 2 task))
-		  (let ((task-time (/ (org-clock-sum sdate fdate) 60.0))
-				(prev-time (or (plist-get pro-time (nth 0 task) 'string=) 0)))
+		  (let* ((task-time (/ (org-clock-sum sdate fdate) 60.0))
+				(key (proroam--time-key (nth 0 task)
+										  (or (nth 4 task) (nth 4 (proroam--find-project (nth 0 task))))))
+				(prev-time (or (plist-get pro-time key 'string=) 0)))
 			(when (> task-time 0)
-			  (setq pro-time (plist-put pro-time (nth 0 task) (+ prev-time task-time) 'string=)))
+			  (setq pro-time (plist-put pro-time key (+ prev-time task-time) 'string=)))
 			)
 		  )
 		)
 	  )
 	(dolist (project (proroam--projects))
 	  (with-current-buffer (find-file-noselect (nth 1 project))
-		(let ((task-time (/ (org-clock-sum sdate fdate) 60.0))
-			  (prev-time (or (plist-get pro-time (nth 0 project) 'string=) 0)))
+		(let* ((task-time (/ (org-clock-sum sdate fdate) 60.0))
+			  (key (proroam--time-key (nth 0 project) (nth 4 project)))
+			  (prev-time (or (plist-get pro-time key 'string=) 0)))
 		  (when (> task-time 0)
-			(setq pro-time (plist-put pro-time (nth 0 project) (+ prev-time task-time) 'string=)))
+			(setq pro-time (plist-put pro-time key (+ prev-time task-time) 'string=)))
 		  )
 		)
 	  )
@@ -311,13 +335,15 @@ project id, the task id, filename and title of the task."
 	  ;; Write table rows for each project
 	  (dotimes (idx (/ (length pro-time) 2))
 		(let* ((proj-id (nth (* 2 idx) pro-time))
+			   (key-parts (split-string proj-id "|"))
+			   (task-no (or (cadr key-parts) ""))
 			   (total-hours (nth (+ (* 2 idx) 1) pro-time))
-			   (project (proroam--find-project proj-id))
+			   (project (proroam--find-project (car key-parts)))
 			   (habitat-id (nth 3 project))
 			   (project-no (if (string= habitat-id "no-id") (nth 2 project) habitat-id))
 			   (project-desc (nth 2 project)))
 		  ;; Type, Status, Project No., Project Description
-		  (insert (format "Project\tSubmitted\t%s\t%s\t\t\t\t" project-no project-desc))
+		  (insert (format "Project\tSubmitted\t%s\t%s\t\t%s\t\t" project-no project-desc task-no))
 		  ;; Hours for each day (Mon-Fri)
 		  (dotimes (day 5)
 			(let ((day-hours (cdr (assoc proj-id (nth day daily-schedule) 'string=))))
